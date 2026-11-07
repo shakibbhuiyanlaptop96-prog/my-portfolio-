@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MIRBAGH TV — MTv NEWS 7/24</title>
+<meta name="description" content="MIRBAGH TV — সত্যের সন্ধানে মানুষের পাশে। কাউনিয়া, রংপুরের বাংলা অনলাইন নিউজ পোর্টাল।">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Hind+Siliguri:wght@400;500;600;700&display=swap" rel="stylesheet">
+<!--
+=== SUPABASE সেটআপ (একবার করতে হবে) ===
+১. supabase.com এ প্রজেক্ট খুলুন → Project URL ও anon public key নিচে SB_URL ও SB_KEY তে বসান।
+   (শুধু anon key বসাবেন। service_role key কখনও এখানে বসাবেন না।)
+২. Storage এ "media" নামে Public bucket বানান।
+৩. SQL Editor এ নিচের SQL চালান:
+
+create table profiles(id uuid primary key references auth.users, name text, role text default 'reporter');
+create table articles(id bigint generated always as identity primary key, title text not null, subtitle text, summary text, body text, category text, image_url text, reporter text, status text default 'pending', featured bool default false, breaking bool default false, views int default 0, author_id uuid default auth.uid(), created_at timestamptz default now());
+create function is_staff() returns bool language sql security definer as $$ select exists(select 1 from profiles where id=auth.uid() and role in ('super_admin','admin','editor')) $$;
+create function inc_views(aid bigint) returns void language sql security definer as $$ update articles set views=views+1 where id=aid and status='published' $$;
+alter table profiles enable row level security; alter table articles enable row level security;
+create policy p_me on profiles for select using (id=auth.uid());
+create policy a_read on articles for select using (status='published' or author_id=auth.uid() or is_staff());
+create policy a_ins on articles for insert with check (is_staff() or (author_id=auth.uid() and status='pending' and not featured and not breaking));
+create policy a_upd on articles for update using (is_staff());
+create policy a_del on articles for delete using (is_staff());
+create policy m_ins on storage.objects for insert to authenticated with check (bucket_id='media');
+
+   আরও SQL (ভিডিও, সেটিংস, সংশোধন অনুরোধ):
+alter table articles add column video_url text;
+create table site_settings(key text primary key, value text);
+alter table site_settings enable row level security;
+create policy s_read on site_settings for select using(true);
+create policy s_w on site_settings for all using(is_staff()) with check(is_staff());
+create table corrections(id bigint generated always as identity primary key, article_id bigint, message text not null, email text, created_at timestamptz default now());
+alter table corrections enable row level security;
+create policy c_ins on corrections for insert with check(true);
+create policy c_read on corrections for select using(is_staff());
+
+   বিজ্ঞাপন, মন্তব্য, নিউজলেটার SQL:
+create table advertisements(id bigint generated always as identity primary key, name text, image_url text, link text, position text, starts date, ends date, active bool default true, views int default 0, clicks int default 0, created_at timestamptz default now());
+create table comments(id bigint generated always as identity primary key, article_id bigint, name text, body text not null, approved bool default false, created_at timestamptz default now());
+create table subscribers(id bigint generated always as identity primary key, email text unique, created_at timestamptz default now());
+alter table advertisements enable row level security; alter table comments enable row level security; alter table subscribers enable row level security;
+create policy ad_r on advertisements for select using(active or is_staff());
+create policy ad_w on advertisements for all using(is_staff()) with check(is_staff());
+create policy cm_r on comments for select using(approved or is_staff());
+create policy cm_i on comments for insert with check(approved=false);
+create policy cm_w on comments for update using(is_staff());
+create policy cm_d on comments for delete using(is_staff());
+create policy sub_i on subscribers for insert with check(true);
+create policy sub_r on subscribers for select using(is_staff());
+create function ad_hit(aid bigint, k text) returns void language sql security definer as $$ update advertisements set views=views+(k='view')::int, clicks=clicks+(k='click')::int where id=aid $$;
+
+   ক্যাটাগরি, পোল, গ্যালারি SQL:
+alter table articles add column gallery jsonb default '[]';
+create table categories(slug text primary key, name text not null);
+create table polls(id bigint generated always as identity primary key, question text not null, options text[] not null, votes int[] not null, active bool default true, created_at timestamptz default now());
+alter table categories enable row level security; alter table polls enable row level security;
+create policy ct_r on categories for select using(true);
+create policy ct_w on categories for all using(is_staff()) with check(is_staff());
+create policy pl_r on polls for select using(active or is_staff());
+create policy pl_w on polls for all using(is_staff()) with check(is_staff());
+create function poll_vote(pid bigint, idx int) returns void language sql security definer as $$ update polls set votes[idx+1]=votes[idx+1]+1 where id=pid and active and idx>=0 and idx<array_length(options,1) $$;
+
+   অডিট লগ SQL:
+create table audit_logs(id bigint generated always as identity primary key, user_id uuid default auth.uid(), action text, detail text, created_at timestamptz default now());
+alter table audit_logs enable row level security;
+create policy au_i on audit_logs for insert with check(is_staff());
+create policy au_r on audit_logs for select using(is_staff());
+
+   মিডিয়া লাইব্রেরি SQL:
+create policy m_sel on storage.objects for select to authenticated using(bucket_id='media' and is_staff());
+create policy m_del on storage.objects for delete to authenticated using(bucket_id='media' and is_staff());
+
+   ইউজার তৈরি: create-user ফোল্ডারের index.ts Supabase Edge Function হিসেবে ডিপ্লয় করুন (supabase functions deploy create-user)।
+
+৪. Authentication → Users এ ব্যবহারকারী বানান, তারপর profiles টেবিলে তার id ও role
+   (super_admin / admin / editor / reporter) বসান।
+৫. লগইন: ওয়েবসাইটের Login বাটন → #/admin
+-->
+<style>
+:root{--navy:#101C32;--red:#D92332;--bg:#fff;--tx:#252525;--mut:#667;--card:#f4f6f9;--line:#e2e6ec}
+[data-t=dark]{--bg:#0b1220;--tx:#e8ecf3;--mut:#9aa6bb;--card:#16213a;--line:#25324d}
+*{box-sizing:border-box;margin:0;padding:0}
+html{overflow-x:hidden}
+body{font-family:'Hind Siliguri','Noto Sans Bengali',sans-serif;background:var(--bg);color:var(--tx);line-height:1.6;overflow-x:hidden;min-width:320px}
+a{color:inherit;text-decoration:none}
+img{max-width:100%;display:block}
+button,input,select,textarea{font:inherit;color:inherit}
+.wrap{max-width:1200px;margin:0 auto;padding:0 14px}
+header{background:var(--navy);color:#fff;position:sticky;top:0;z-index:20}
+.top{display:flex;align-items:center;gap:10px;padding:8px 0;flex-wrap:wrap}
+.brand{display:flex;align-items:center;gap:8px;flex:1;min-width:0}
+.brand b{font-size:20px;font-weight:700;letter-spacing:.5px;line-height:1.1;display:block}
+.brand small{color:#ff8a93;font-weight:600;font-size:12px}
+.date{font-size:12px;color:#c5cde0;display:none}
+.ib{background:transparent;border:1px solid #ffffff44;color:#fff;border-radius:6px;min-width:40px;height:40px;cursor:pointer;padding:0 10px;font-weight:500}
+.ib.red{background:var(--red);border-color:var(--red)}
+nav{background:var(--navy);border-top:1px solid #ffffff22}
+nav ul{list-style:none;display:none;flex-direction:column;padding:6px 0}
+nav.open ul{display:flex}
+nav a{display:block;padding:10px 4px;font-weight:500;border-bottom:1px solid #ffffff14;color:#fff}
+nav a.on{color:#ff8a93}
+#sf{display:none;padding:8px 0}
+#sf.open{display:flex;gap:6px}
+#sf input{flex:1;min-width:0;padding:10px;border-radius:6px;border:0;background:#fff;color:#222}
+.tick{background:var(--red);color:#fff;display:none;align-items:center;overflow:hidden}
+.tick.on{display:flex}
+.tick strong{background:var(--navy);padding:6px 12px;white-space:nowrap;z-index:1}
+.tick div{overflow:hidden;flex:1}
+.tick span{display:inline-block;white-space:nowrap;padding-left:100%;animation:mq 40s linear infinite}
+.tick a{margin-right:40px;font-weight:500}
+@keyframes mq{to{transform:translateX(-100%)}}
+@media(prefers-reduced-motion:reduce){.tick span{animation:none;padding:0}}
+main{padding:16px 0 30px;min-height:60vh}
+h2.sec{font-size:20px;border-bottom:3px solid var(--red);margin:26px 0 12px;display:flex;justify-content:space-between;align-items:end;gap:8px}
+h2.sec span{background:var(--navy);color:#fff;padding:2px 12px;border-radius:4px 4px 0 0;margin-bottom:-3px}
+h2.sec a{font-size:14px;color:var(--red);font-weight:600}
+.grid{display:grid;gap:14px;grid-template-columns:1fr}
+.card{background:var(--card);border-radius:8px;overflow:hidden;display:flex;flex-direction:column;border:1px solid var(--line)}
+.card .im{aspect-ratio:16/9;background:var(--navy);width:100%;object-fit:cover;display:flex;align-items:center;justify-content:center;color:#ffffff55;font-weight:700;font-size:22px}
+.card .bd{padding:10px 12px 12px}
+.card h3{font-size:17px;line-height:1.4;font-weight:700}
+.card:hover h3{color:var(--red)}
+.meta{font-size:12.5px;color:var(--mut)}
+.tag{display:inline-block;background:var(--red);color:#fff;font-size:12px;padding:0 8px;border-radius:3px;margin-bottom:4px}
+.lead{display:grid;gap:0}
+.lead .im{aspect-ratio:16/9}
+.lead h3{font-size:24px}
+.lead p{margin:6px 0 10px}
+.btn{display:inline-block;background:var(--red);color:#fff;border:0;border-radius:6px;padding:9px 16px;font-weight:600;cursor:pointer;min-height:40px}
+.btn.alt{background:var(--navy)}.btn.sm{padding:4px 10px;min-height:32px;font-size:14px}
+.empty{padding:30px 14px;text-align:center;background:var(--card);border-radius:8px;color:var(--mut)}
+.notice{background:#fff3cd;color:#664d03;border-radius:8px;padding:12px 14px;margin-bottom:14px;font-size:14px}
+article.full{max-width:800px;margin:0 auto}
+article h1{font-size:28px;line-height:1.35;margin:6px 0}
+article .sub{font-size:18px;color:var(--mut);margin-bottom:8px}
+article .hero{width:100%;border-radius:8px;margin:12px 0 4px}
+article .body p{margin:0 0 14px;font-size:18px;line-height:1.85}
+.share{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0}
+.crumb{font-size:13px;color:var(--mut)}
+form.f{display:grid;gap:10px;max-width:760px}
+.f label{font-weight:600;font-size:14px;display:grid;gap:4px}
+.f input,.f select,.f textarea{padding:10px;border:1px solid var(--line);border-radius:6px;background:var(--bg);width:100%}
+.f textarea{min-height:200px}
+.row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+.tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+.list{display:grid;gap:10px}
+.li{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 12px;display:grid;gap:6px}
+.li b{overflow-wrap:anywhere}
+.st{font-size:12px;border-radius:3px;padding:0 8px;background:var(--line);display:inline-block}
+.st.published{background:#198754;color:#fff}.st.pending{background:#f0ad4e}.st.rejected{background:var(--red);color:#fff}
+footer{background:var(--navy);color:#dfe5f2;padding:26px 0 14px;font-size:14px}
+footer .g{display:grid;gap:18px;grid-template-columns:1fr}
+footer h4{color:#fff;font-size:18px}
+footer ul{list-style:none}footer li{margin:2px 0}
+footer .cp{border-top:1px solid #ffffff22;margin-top:18px;padding-top:10px;color:#9aa6bb;font-size:12.5px}
+.ad{display:block;margin:16px auto;max-width:728px;text-align:center}.ad img{margin:2px auto;border-radius:6px}
+.cmt{border-top:1px solid var(--line);padding:8px 0}
+.body h2{margin:16px 0 8px;font-size:22px}.body ul,.body ol{margin:0 0 14px 24px}.body a{color:var(--red);text-decoration:underline}
+.stats{display:grid;gap:10px;grid-template-columns:repeat(2,1fr);margin-bottom:14px}.stats div{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px;text-align:center}.stats b{display:block;font-size:26px}
+:focus-visible{outline:3px solid #4da3ff;outline-offset:2px}
+@media(min-width:768px){
+ .grid.c2,.grid.c3,.grid.c4{grid-template-columns:repeat(2,1fr)}
+ .date{display:block}
+ .lead{grid-template-columns:1.4fr 1fr;gap:18px;align-items:center}
+ footer .g{grid-template-columns:2fr 1fr 1.5fr}
+}
+@media(min-width:1024px){
+ #mb{display:none}
+ nav ul{display:flex!important;flex-direction:row;flex-wrap:wrap;gap:0 4px}
+ nav a{border:0;padding:9px 10px}
+ .grid.c3{grid-template-columns:repeat(3,1fr)}
+ .grid.c4{grid-template-columns:repeat(4,1fr)}
+ .wrap{padding:0 20px}
+}
+@media print{header,nav,.tick,footer,.share{display:none!important}}
+</style>
+</head>
+<body>
+<header>
+ <div class="wrap top">
+  <a href="#/" class="brand" aria-label="প্রচ্ছদ">
+   <svg width="44" height="44" viewBox="0 0 44 44" aria-hidden="true"><circle cx="22" cy="22" r="21" fill="#D92332"/><path d="M9 32V12l6.5 9L22 12l6.5 9L35 12v20" fill="none" stroke="#fff" stroke-width="3.2" stroke-linejoin="round"/></svg>
+   <span><b>MIRBAGH TV</b><small>MTv NEWS 7/24</small></span>
+  </a>
+  <span class="date" id="dt"></span><span class="date" id="wx"></span>
+  <button class="ib" id="sb" aria-label="সার্চ">🔍</button>
+  <button class="ib" id="tm" aria-label="ডার্ক মোড">🌓</button>
+  <a class="ib red" href="#/admin" style="display:flex;align-items:center" id="lg">লগইন</a>
+  <button class="ib" id="mb" aria-label="মেনু" aria-expanded="false">☰</button>
+ </div>
+ <div class="wrap"><form id="sf" role="search"><input id="q" placeholder="শিরোনাম, বিষয় বা স্থান লিখুন" aria-label="সার্চ"><button class="btn">খুঁজুন</button></form></div>
+ <nav id="nv"><div class="wrap"><ul id="mn"></ul></div></nav>
+</header>
+<div class="tick" id="tk"><strong>ব্রেকিং</strong><div><span id="tks"></span></div></div>
+<main class="wrap" id="app"></main>
+<footer>
+ <div class="wrap">
+  <div class="g">
+   <div><h4>MIRBAGH TV</h4><b style="color:#ff8a93">MTv NEWS 7/24</b><p>সত্যের সন্ধানে মানুষের পাশে।</p></div>
+   <div><ul><li><a href="#/saved">সংরক্ষিত নিউজ</a></li><li><a href="#/page/about">আমাদের সম্পর্কে</a></li><li><a href="#/page/contact">যোগাযোগ</a></li><li><a href="#/page/privacy">গোপনীয়তা নীতি</a></li><li><a href="#/page/terms">ব্যবহারের শর্ত</a></li><li><a href="#/page/correction">সংবাদ সংশোধন নীতি</a></li></ul></div>
+   <div>News Desk: <a href="tel:+8801869841835">+8801869841835</a><br>Email: <a href="mailto:mirbaghtv00@gmail.com">mirbaghtv00@gmail.com</a><br>Location: Mirbagh, Kaunia, Rangpur, Bangladesh<br><span id="soc"></span></div>
+  </div>
+  <form id="nl" style="margin-top:14px;display:flex;gap:6px;max-width:420px"><input type="email" id="ne" required placeholder="নিউজলেটারের জন্য ইমেইল" aria-label="ইমেইল" style="flex:1;min-width:0;padding:8px;border-radius:6px;border:0;color:#222"><button class="btn sm">সাবস্ক্রাইব</button></form><div id="nm2" class="meta"></div><div id="fa"></div>
+  <div class="cp">© <span id="yr"></span> MIRBAGH TV। সর্বস্বত্ব সংরক্ষিত।</div>
+ </div>
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script>
+// ====== কনফিগারেশন: এখানে আপনার Supabase URL ও anon key বসান ======
+const SB_URL="", SB_KEY="";
+// ==================================================================
+const sb=(SB_URL&&SB_KEY&&window.supabase)?supabase.createClient(SB_URL,SB_KEY):null;
+const CATS=[['latest','সর্বশেষ'],['national','জাতীয়'],['international','আন্তর্জাতিক'],['rangpur','রংপুর'],['kaunia','কাউনিয়া'],['education','শিক্ষা'],['economy','অর্থনীতি'],['sports','খেলাধুলা'],['entertainment','বিনোদন'],['technology','প্রযুক্তি'],['health','স্বাস্থ্য'],['agriculture','কৃষি'],['crime','অপরাধ'],['video','ভিডিও'],['live','লাইভ']];
+const catName=k=>(CATS.find(c=>c[0]==k)||[0,k||''])[1];
+const $=s=>document.querySelector(s), app=$('#app');
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmt=d=>new Date(d).toLocaleString('bn-BD',{dateStyle:'medium',timeStyle:'short'});
+const ST={published:'প্রকাশিত',pending:'অনুমোদনের অপেক্ষায়',rejected:'বাতিল',draft:'খসড়া'};
+let me=null,role=null;
+
+// থিম, মেনু, সার্চ
+const th=localStorage.getItem('theme');if(th)document.documentElement.dataset.t=th;
+$('#tm').onclick=()=>{const t=document.documentElement.dataset.t=='dark'?'light':'dark';document.documentElement.dataset.t=t;localStorage.setItem('theme',t)};
+$('#mb').onclick=()=>{const o=$('#nv').classList.toggle('open');$('#mb').setAttribute('aria-expanded',o)};
+$('#sb').onclick=()=>{$('#sf').classList.toggle('open');$('#q').focus()};
+$('#sf').onsubmit=e=>{e.preventDefault();const v=$('#q').value.trim();if(v)location.hash='#/search/'+encodeURIComponent(v)};
+const navR=()=>{$('#mn').innerHTML='<li><a href="#/">প্রচ্ছদ</a></li>'+CATS.map(c=>`<li><a href="#/cat/${c[0]}">${esc(c[1])}</a></li>`).join('')};navR();
+$('#dt').textContent=new Date().toLocaleDateString('bn-BD',{weekday:'long',year:'numeric',month:'long',day:'numeric'});
+$('#yr').textContent=new Date().getFullYear();
+fetch('https://api.open-meteo.com/v1/forecast?latitude=25.74&longitude=89.27&current=temperature_2m').then(r=>r.json()).then(j=>{const t=j.current&&j.current.temperature_2m;if(typeof t=='number')$('#wx').textContent='রংপুর: '+Math.round(t).toLocaleString('bn-BD')+'°সে.'}).catch(()=>{});
+
+const card=a=>`<a class="card" href="#/news/${a.id}">${a.image_url?`<img class="im" src="${esc(a.image_url)}" alt="${esc(a.title)}" loading="lazy">`:'<div class="im">MTv</div>'}<div class="bd"><span class="tag">${esc(catName(a.category))}</span><h3>${esc(a.title)}</h3><div class="meta">${fmt(a.created_at)}</div></div></a>`;
+const need=()=>sb?'':'<div class="notice">ডাটাবেস সংযুক্ত নেই। ফাইলের শুরুতে থাকা নির্দেশনা অনুযায়ী SB_URL ও SB_KEY বসালে সংবাদ প্রদর্শিত হবে।</div>';
+const pub=()=>sb.from('articles').select('*').eq('status','published');
+let SET={};
+async function loadSet(){if(!sb)return;const cr=await sb.from('categories').select('*');(cr.data||[]).forEach(c=>{if(!CATS.some(x=>x[0]==c.slug))CATS.push([c.slug,c.name])});navR();
+const{data}=await sb.from('site_settings').select('*');(data||[]).forEach(r=>SET[r.key]=r.value);$('#soc').innerHTML=[['facebook','Facebook'],['youtube','YouTube']].filter(k=>/^https?:\/\//.test(SET[k[0]]||'')).map(k=>`<a href="${esc(SET[k[0]])}" target="_blank" rel="noopener" style="margin-right:12px;text-decoration:underline">${k[1]}</a>`).join('')}
+function clean(h){
+ const d=new DOMParser().parseFromString('<body>'+h,'text/html').body,OK=['P','BR','B','STRONG','I','EM','H2','UL','OL','LI','A','DIV'];
+ (function w(n){[...n.childNodes].forEach(c=>{
+  if(c.nodeType==3)return;
+  if(c.nodeType!=1||!OK.includes(c.tagName)){if(c.nodeType==1&&c.childNodes.length){w(c);c.replaceWith(...c.childNodes)}else c.remove();return}
+  const href=c.tagName=='A'?c.getAttribute('href'):null;
+  [...c.attributes].forEach(a=>c.removeAttribute(a.name));
+  if(c.tagName=='A'){if(/^https?:\/\//i.test(href||'')){c.setAttribute('href',href);c.setAttribute('rel','noopener nofollow');c.setAttribute('target','_blank')}else{w(c);c.replaceWith(...c.childNodes);return}}
+  w(c);
+ })})(d);
+ return d.innerHTML;
+}
+const bodyToHtml=b=>/<(p|div|br|h2|ul|ol|b|i|strong|em|a)[\s>\/]/i.test(b)?clean(b):esc(b).split(/\n+/).map(p=>`<p>${p}</p>`).join('');
+const log=(a,d)=>{if(sb)sb.from('audit_logs').insert({action:a,detail:String(d).slice(0,200)}).then(()=>{})};
+async function webp(f){
+ if(!/^image\/(jpeg|png)$/.test(f.type))return f;
+ try{const b=await createImageBitmap(f),s=Math.min(1,1600/b.width),c=document.createElement('canvas');c.width=Math.round(b.width*s);c.height=Math.round(b.height*s);c.getContext('2d').drawImage(b,0,0,c.width,c.height);
+ const bl=await new Promise(r=>c.toBlob(r,'image/webp',.82));
+ return bl&&bl.type=='image/webp'&&bl.size<f.size?new File([bl],f.name.replace(/\.\w+$/,'')+'.webp',{type:'image/webp'}):f}catch{return f}
+}
+async function up(file,dir){
+ file=await webp(file);
+ const p=`${dir}/${Date.now()}-${Math.random().toString(36).slice(2,6)}-${file.name.replace(/[^\w.-]/g,'_')}`;
+ const{error}=await sb.storage.from('media').upload(p,file);
+ return error?null:sb.storage.from('media').getPublicUrl(p).data.publicUrl;
+}
+async function poll(){
+ const{data}=await sb.from('polls').select('*').eq('active',true).order('created_at',{ascending:false}).limit(1);
+ const p=data&&data[0];if(!p)return;
+ const done=localStorage.getItem('pv'+p.id)!==null,tot=p.votes.reduce((a,b)=>a+b,0);
+ app.insertAdjacentHTML('beforeend',`<h2 class="sec"><span>আপনার মতামত</span></h2><form class="f" id="pf"><b>${esc(p.question)}</b>${p.options.map((o,i)=>done?`<div>${esc(o)}: ${p.votes[i]} ভোট (${tot?Math.round(p.votes[i]*100/tot):0}%)</div>`:`<label class="row"><input type="radio" name="o" value="${i}" style="width:auto" required> ${esc(o)}</label>`).join('')}${done?'':'<button class="btn sm">ভোট দিন</button>'}</form>`);
+ if(!done)$('#pf').onsubmit=async e=>{e.preventDefault();const i=+new FormData(e.target).get('o');await sb.rpc('poll_vote',{pid:p.id,idx:i});localStorage.setItem('pv'+p.id,i);route()};
+}
+async function adHtml(pos){
+ if(!sb)return'';
+ const t=new Date().toISOString().slice(0,10);
+ const{data}=await sb.from('advertisements').select('*').eq('active',true).eq('position',pos);
+ const L=(data||[]).filter(a=>(!a.starts||a.starts<=t)&&(!a.ends||a.ends>=t));
+ if(!L.length)return'';
+ const a=L[Math.floor(Math.random()*L.length)];
+ sb.rpc('ad_hit',{aid:a.id,k:'view'});
+ const im=`<img src="${esc(a.image_url)}" alt="${esc(a.name)}" loading="lazy">`;
+ return `<div class="ad"><span class="meta">বিজ্ঞাপন</span>${a.link?`<a href="${esc(a.link)}" target="_blank" rel="noopener sponsored" data-ad="${a.id}">${im}</a>`:im}</div>`;
+}
+document.addEventListener('click',e=>{const a=e.target.closest('[data-ad]');if(a&&sb)sb.rpc('ad_hit',{aid:+a.dataset.ad,k:'click'})});
+$('#nl').onsubmit=async e=>{e.preventDefault();if(!sb)return;const{error}=await sb.from('subscribers').insert({email:$('#ne').value});$('#nm2').textContent=error?(error.code=='23505'?'এই ইমেইল আগেই যুক্ত আছে।':'সাবস্ক্রাইব করা যায়নি।'):'ধন্যবাদ, সাবস্ক্রাইব হয়েছে।';if(!error)e.target.reset()};
+async function cmts(id){
+ const{data}=await sb.from('comments').select('*').eq('article_id',id).eq('approved',true).order('created_at');
+ $('article.full').insertAdjacentHTML('beforeend',`<div id="cm"><h2 class="sec"><span>মন্তব্য</span></h2>${(data||[]).map(c=>`<div class="cmt"><b>${esc(c.name)}</b> <span class="meta">${fmt(c.created_at)}</span><p>${esc(c.body)}</p></div>`).join('')||'<p class="meta">এখনো কোনো মন্তব্য নেই।</p>'}<form class="f" id="cf"><label>নাম<input name="n" required maxlength="60"></label><label>মন্তব্য<textarea name="b" required maxlength="1000" style="min-height:90px"></textarea></label><div class="meta" id="cmm"></div><button class="btn sm">মন্তব্য করুন</button></form></div>`);
+ $('#cf').onsubmit=async ev=>{ev.preventDefault();const f=new FormData(ev.target);const{error}=await sb.from('comments').insert({article_id:id,name:f.get('n'),body:f.get('b')});$('#cmm').textContent=error?'মন্তব্য পাঠানো যায়নি।':'ধন্যবাদ, অনুমোদনের পর মন্তব্য প্রকাশিত হবে।';if(!error)ev.target.reset()};
+}
+function embed(u){u=u||'';const m=u.match(/(?:youtu\.be\/|v=|\/embed\/|\/live\/)([\w-]{11})/);if(m)return 'https://www.youtube.com/embed/'+m[1];if(/^https:\/\/(www\.)?facebook\.com\//.test(u))return 'https://www.facebook.com/plugins/video.php?href='+encodeURIComponent(u);return ''}
+const vid=u=>{const s=embed(u);return s?`<div style="aspect-ratio:16/9;margin:12px 0"><iframe src="${s}" style="width:100%;height:100%;border:0;border-radius:8px" allowfullscreen loading="lazy" title="ভিডিও"></iframe></div>`:''};
+
+async function ticker(){
+ if(!sb)return;
+ const{data}=await pub().eq('breaking',true).order('created_at',{ascending:false}).limit(8);
+ const t=$('#tk');
+ if(data&&data.length){$('#tks').innerHTML=data.map(a=>`<a href="#/news/${a.id}">${esc(a.title)}</a>`).join('');t.classList.add('on')}else t.classList.remove('on');
+}
+
+async function home(){
+ app.innerHTML=need();
+ if(!sb)return;
+ const{data}=await pub().order('created_at',{ascending:false}).limit(60);
+ if(!data||!data.length){app.innerHTML+='<div class="empty">এখনো কোনো সংবাদ প্রকাশিত হয়নি।</div>';return}
+ const L=data.find(a=>a.featured)||data[0], rest=data.filter(a=>a.id!=L.id);
+ let h=await adHtml('top')+`<div class="card lead">${L.image_url?`<img class="im" src="${esc(L.image_url)}" alt="${esc(L.title)}">`:'<div class="im">MTv</div>'}<div class="bd"><span class="tag">${esc(catName(L.category))}</span><h3><a href="#/news/${L.id}">${esc(L.title)}</a></h3><p>${esc(L.summary||'')}</p><div class="meta">${fmt(L.created_at)}</div><br><a class="btn" href="#/news/${L.id}">বিস্তারিত পড়ুন</a></div></div>`;
+ h+=`<h2 class="sec"><span>সর্বশেষ সংবাদ</span></h2><div class="grid c4">${rest.slice(0,8).map(card).join('')}</div>`;
+ const pop=[...data].sort((a,b)=>b.views-a.views).filter(a=>a.views>0).slice(0,5);
+ if(pop.length)h+=`<h2 class="sec"><span>আলোচিত সংবাদ</span></h2><div class="list">${pop.map(a=>`<a class="li" href="#/news/${a.id}"><b>${esc(a.title)}</b><span class="meta">${a.views} বার পঠিত</span></a>`).join('')}</div>`;
+ for(const k of['rangpur','kaunia','national','international','sports','education','entertainment','technology']){
+  const x=data.filter(a=>a.category==k).slice(0,4);
+  if(x.length)h+=`<h2 class="sec"><span>${catName(k)}</span><a href="#/cat/${k}">আরও দেখুন</a></h2><div class="grid c4">${x.map(card).join('')}</div>`;
+ }
+ app.innerHTML=h;poll();
+}
+
+async function cat(k){
+ if(k=='live'){app.innerHTML=need()+'<h2 class="sec"><span>লাইভ</span></h2>'+(vid(SET.live_url)||'<div class="empty">এখন কোনো লাইভ সম্প্রচার নেই।</div>');return}
+ app.innerHTML=need()+`<h2 class="sec"><span>${esc(catName(k))}</span></h2>`;
+ if(!sb)return;
+ let q=pub().order('created_at',{ascending:false}).limit(40);
+ if(k!='latest')q=q.eq('category',k);
+ const{data}=await q;
+ app.innerHTML+=data&&data.length?`<div class="grid c4">${data.map(card).join('')}</div>`:'<div class="empty">এই বিভাগে এখনো কোনো সংবাদ নেই।</div>';
+}
+
+async function search(t){
+ app.innerHTML=need()+`<h2 class="sec"><span>অনুসন্ধান: ${esc(t)}</span></h2>`;
+ if(!sb)return;
+ const s=t.replace(/[%,()]/g,' ');
+ const{data}=await pub().or(`title.ilike.%${s}%,summary.ilike.%${s}%,reporter.ilike.%${s}%,body.ilike.%${s}%`).order('created_at',{ascending:false}).limit(40);
+ app.innerHTML+=data&&data.length?`<div class="grid c4">${data.map(card).join('')}</div>`:'<div class="empty">কোনো ফলাফল পাওয়া যায়নি।</div>';
+}
+
+async function news(id){
+ app.innerHTML=need();
+ if(!sb)return;
+ const{data:a}=await sb.from('articles').select('*').eq('id',id).maybeSingle();
+ if(!a){app.innerHTML='<div class="empty"><h2>৪০৪ — পাতাটি পাওয়া যায়নি</h2><p><a class="btn" href="#/">প্রচ্ছদে ফিরুন</a></p></div>';return}
+ if(a.status=='published')sb.rpc('inc_views',{aid:a.id});
+ document.title=a.title+' | MIRBAGH TV';
+ const u=encodeURIComponent(location.href);
+ const{data:rel}=await pub().eq('category',a.category).neq('id',a.id).order('created_at',{ascending:false}).limit(4);
+ app.innerHTML=`<article class="full"><div class="crumb"><a href="#/">প্রচ্ছদ</a> › <a href="#/cat/${esc(a.category)}">${esc(catName(a.category))}</a></div>
+ <h1>${esc(a.title)}</h1>${a.subtitle?`<div class="sub">${esc(a.subtitle)}</div>`:''}
+ <div class="meta">${a.reporter?'প্রতিবেদক: '+esc(a.reporter)+' | ':''}প্রকাশ: ${fmt(a.created_at)} | ${a.views||0} বার পঠিত</div>
+ ${a.image_url?`<img class="hero" src="${esc(a.image_url)}" alt="${esc(a.title)}">`:''}${vid(a.video_url)}
+ <div class="share"><a class="btn sm alt" target="_blank" rel="noopener" href="https://www.facebook.com/sharer/sharer.php?u=${u}">Facebook</a><a class="btn sm alt" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(a.title)}%20${u}">WhatsApp</a><button class="btn sm alt" id="cp">লিংক কপি</button><button class="btn sm alt" onclick="print()">প্রিন্ট</button><button class="btn sm alt" id="bk"></button><button class="btn sm alt" id="rp">ভুল রিপোর্ট করুন</button></div><div id="rf"></div>
+ <div class="body">${bodyToHtml(a.body||'')}</div>${(Array.isArray(a.gallery)?a.gallery:[]).map(u=>`<img class="hero" src="${esc(u)}" alt="${esc(a.title)}" loading="lazy">`).join('')}</article>
+ ${rel&&rel.length?`<h2 class="sec"><span>সম্পর্কিত সংবাদ</span></h2><div class="grid c4">${rel.map(card).join('')}</div>`:''}`;
+ $('#cp').onclick=()=>navigator.clipboard.writeText(location.href).then(()=>{$('#cp').textContent='কপি হয়েছে'});
+ const bm=()=>{try{return JSON.parse(localStorage.getItem('bk')||'[]')}catch{return[]}};
+ const bt=()=>{$('#bk').textContent=bm().includes(a.id)?'সংরক্ষিত ✓':'সংরক্ষণ করুন'};bt();
+ $('#bk').onclick=()=>{let l=bm();l=l.includes(a.id)?l.filter(x=>x!=a.id):[...l,a.id];localStorage.setItem('bk',JSON.stringify(l));bt()};
+ let ld=document.getElementById('ld');if(!ld){ld=document.createElement('script');ld.id='ld';ld.type='application/ld+json';document.head.appendChild(ld)}
+ ld.textContent=JSON.stringify({'@context':'https://schema.org','@type':'NewsArticle',headline:a.title,datePublished:a.created_at,image:a.image_url?[a.image_url]:undefined,author:{'@type':'Person',name:a.reporter||'MIRBAGH TV'},publisher:{'@type':'Organization',name:'MIRBAGH TV'}});
+ document.querySelector('meta[name=description]').content=a.summary||a.title;
+ cmts(a.id);adHtml('article').then(h=>{const b=$('article.full .body');if(b)b.insertAdjacentHTML('afterend',h)});
+ $('#rp').onclick=()=>{$('#rf').innerHTML='<form class="f" id="rfm"><label>কোন তথ্যটি ভুল বা সংশোধন প্রয়োজন?<textarea name="m" required style="min-height:90px"></textarea></label><label>ইমেইল (ঐচ্ছিক)<input name="e" type="email"></label><div class="meta" id="rm"></div><button class="btn sm">পাঠান</button></form>';$('#rfm').onsubmit=async ev=>{ev.preventDefault();const f=new FormData(ev.target);const{error}=await sb.from('corrections').insert({article_id:a.id,message:f.get('m'),email:f.get('e')||null});$('#rm').textContent=error?'পাঠানো যায়নি। আবার চেষ্টা করুন।':'ধন্যবাদ, আপনার অনুরোধ পাঠানো হয়েছে।';if(!error)ev.target.reset()}};
+}
+
+const PAGES={about:['আমাদের সম্পর্কে','MIRBAGH TV (MTv NEWS 7/24) — সত্যের সন্ধানে মানুষের পাশে। কাউনিয়া, রংপুর থেকে পরিচালিত একটি অনলাইন নিউজ পোর্টাল।'],contact:['যোগাযোগ','News Desk: +8801869841835\nEmail: mirbaghtv00@gmail.com\nঠিকানা: মীরবাগ, কাউনিয়া, রংপুর, বাংলাদেশ'],privacy:['গোপনীয়তা নীতি','এই পৃষ্ঠার লেখা প্রতিষ্ঠানের পক্ষ থেকে যুক্ত করতে হবে।'],terms:['ব্যবহারের শর্ত','এই পৃষ্ঠার লেখা প্রতিষ্ঠানের পক্ষ থেকে যুক্ত করতে হবে।'],correction:['সংবাদ সংশোধন নীতি','ভুল তথ্য বা সংশোধনের অনুরোধ জানাতে mirbaghtv00@gmail.com এ যোগাযোগ করুন।']};
+function page(k){const p=PAGES[k];if(!p)return nf();app.innerHTML=`<article class="full"><h1>${p[0]}</h1><div class="body">${p[1].split('\n').map(x=>`<p>${esc(x)}</p>`).join('')}</div></article>`}
+function nf(){app.innerHTML='<div class="empty"><h2>৪০৪ — পাতাটি পাওয়া যায়নি</h2><p><a class="btn" href="#/">প্রচ্ছদে ফিরুন</a></p></div>'}
+
+// ===== অ্যাডমিন / রিপোর্টার প্যানেল =====
+async function who(){
+ if(!sb)return;
+ const{data:{session}}=await sb.auth.getSession();
+ me=session?session.user:null;role=null;
+ if(me){const{data}=await sb.from('profiles').select('role,name').eq('id',me.id).maybeSingle();role=data?data.role:null;me.nm=data&&data.name}
+ $('#lg').textContent=me?'ড্যাশবোর্ড':'লগইন';
+}
+const staff=()=>['super_admin','admin','editor'].includes(role);
+
+async function admin(tab,id){
+ if(!sb){app.innerHTML=need();return}
+ await who();
+ if(!me){
+  app.innerHTML=`<h2 class="sec"><span>লগইন</span></h2><form class="f" id="lf"><label>ইমেইল<input type="email" id="le" required autocomplete="username"></label><label>পাসওয়ার্ড<input type="password" id="lp" required autocomplete="current-password"></label><div id="lm" class="meta"></div><button class="btn">লগইন করুন</button></form>`;
+  $('#lf').onsubmit=async e=>{e.preventDefault();const{error}=await sb.auth.signInWithPassword({email:$('#le').value,password:$('#lp').value});if(error)$('#lm').textContent='লগইন ব্যর্থ: ইমেইল বা পাসওয়ার্ড ভুল।';else admin()};
+  return;
+ }
+ if(!role){app.innerHTML='<div class="empty">আপনার অ্যাকাউন্টে কোনো ভূমিকা (role) দেওয়া হয়নি। Super Admin-এর সাথে যোগাযোগ করুন।<br><br><button class="btn" id="lo">লগআউট</button></div>';$('#lo').onclick=out;return}
+ tab=tab||'list';
+ app.innerHTML=`<h2 class="sec"><span>${staff()?'অ্যাডমিন':'রিপোর্টার'} প্যানেল</span></h2><div class="tabs"><a class="btn sm ${tab=='list'?'':'alt'}" href="#/admin">${staff()?'সকল নিউজ':'আমার নিউজ'}</a><a class="btn sm ${tab=='new'?'':'alt'}" href="#/admin/new">নতুন নিউজ</a>${staff()?'<a class="btn sm alt" href="#/admin/cor">সংশোধন অনুরোধ</a><a class="btn sm alt" href="#/admin/ov">ওভারভিউ</a><a class="btn sm alt" href="#/admin/md">মিডিয়া</a><a class="btn sm alt" href="#/admin/us">ইউজার</a><a class="btn sm alt" href="#/admin/bk">ব্যাকআপ ও sitemap</a><a class="btn sm alt" href="#/admin/log">অডিট লগ</a><a class="btn sm alt" href="#/admin/cat">ক্যাটাগরি</a><a class="btn sm alt" href="#/admin/poll">পোল</a><a class="btn sm alt" href="#/admin/ads">বিজ্ঞাপন</a><a class="btn sm alt" href="#/admin/cm">মন্তব্য</a><a class="btn sm alt" href="#/admin/set">সেটিংস</a>':''}<button class="btn sm alt" id="lo">লগআউট</button></div><div id="pn"></div>`;
+ $('#lo').onclick=out;
+ tab=='new'||tab=='edit'?newForm(id):tab=='set'?setForm():tab=='cor'?corList():tab=='md'?mediaAdmin():tab=='us'?userAdmin():tab=='bk'?backupAdmin():tab=='ov'?ovAdmin():tab=='log'?logAdmin():tab=='cat'?catAdmin():tab=='poll'?pollAdmin():tab=='ads'?adsAdmin():tab=='cm'?cmAdmin():adList();
+}
+async function out(){await sb.auth.signOut();me=null;role=null;$('#lg').textContent='লগইন';location.hash='#/admin';admin()}
+
+async function adList(){
+ let q=sb.from('articles').select('id,title,status,category,views,created_at,reporter').order('created_at',{ascending:false}).limit(100);
+ if(!staff())q=q.eq('author_id',me.id);
+ const{data}=await q;
+ $('#pn').innerHTML=data&&data.length?`<div class="list">${data.map(a=>`<div class="li"><b>${esc(a.title)}</b><div class="meta">${esc(catName(a.category))} | ${esc(a.reporter||'')} | ${fmt(a.created_at)} | ${a.views} ভিউ</div><div class="row"><span class="st ${a.status}">${ST[a.status]||a.status}</span>${a.status=='published'?`<a class="btn sm alt" href="#/news/${a.id}">দেখুন</a>`:''}${staff()?`${a.status!='published'?`<button class="btn sm" data-a="published" data-i="${a.id}">প্রকাশ করুন</button>`:''}${a.status=='pending'?`<button class="btn sm alt" data-a="rejected" data-i="${a.id}">বাতিল</button>`:''}<button class="btn sm alt" data-a="edit" data-i="${a.id}">সম্পাদনা</button><button class="btn sm alt" data-a="del" data-i="${a.id}">মুছুন</button>`:''}</div></div>`).join('')}</div>`:'<div class="empty">কোনো নিউজ নেই। “নতুন নিউজ” থেকে প্রথম সংবাদ জমা দিন।</div>';
+ document.querySelectorAll('[data-a]').forEach(b=>b.onclick=async()=>{
+  const i=b.dataset.i,a=b.dataset.a;
+  if(a=='edit'){location.hash='#/admin/edit/'+i;return}
+  if(a=='del'){if(!confirm('এই নিউজ স্থায়ীভাবে মুছে ফেলবেন?'))return;await sb.from('articles').delete().eq('id',i);log('delete','article '+i)}
+  else{await sb.from('articles').update({status:a}).eq('id',i);log(a,'article '+i)}
+  adList();ticker();
+ });
+}
+
+async function newForm(id){
+ $('#pn').innerHTML=`<form class="f" id="nf">
+ <label>শিরোনাম<input name="title" required maxlength="200"></label>
+ <label>সাব-হেডলাইন<input name="subtitle"></label>
+ <label>সংক্ষিপ্ত বিবরণ<textarea name="summary" style="min-height:70px"></textarea></label>
+ <div class="f"><b>বিস্তারিত প্রতিবেদন</b><div class="row">${[['bold','B'],['italic','I'],['formatBlock','শিরোনাম'],['insertUnorderedList','তালিকা'],['createLink','লিংক'],['removeFormat','ফরম্যাট মুছুন']].map(t=>`<button type="button" class="btn sm alt tbb" data-c="${t[0]}">${t[1]}</button>`).join('')}</div><div id="ed" contenteditable="true" role="textbox" aria-multiline="true" style="min-height:220px;border:1px solid var(--line);border-radius:6px;padding:10px;background:var(--bg);overflow-wrap:anywhere"></div></div>
+ <label>ক্যাটাগরি<select name="category">${CATS.filter(c=>c[0]!='latest').map(c=>`<option value="${c[0]}">${c[1]}</option>`).join('')}</select></label>
+ <label>প্রধান ছবি<input type="file" name="img" accept="image/jpeg,image/png,image/webp"></label>
+ <label>আরও ছবি (একাধিক বাছাই করা যাবে)<input type="file" name="imgs" accept="image/jpeg,image/png,image/webp" multiple></label>
+ <label>ভিডিও URL (YouTube/Facebook, ঐচ্ছিক)<input name="video_url" type="url"></label>
+ <label>প্রতিবেদকের নাম<input name="reporter" value="${esc(me.nm||'')}"></label>
+ ${staff()?'<div class="row"><label class="row"><input type="checkbox" name="featured" style="width:auto"> ফিচার্ড</label><label class="row"><input type="checkbox" name="breaking" style="width:auto"> ব্রেকিং নিউজ</label></div>':''}
+ <div id="nm" class="meta"></div>
+ <div class="row">${staff()?'<button class="btn" data-s="published">প্রকাশ করুন</button>':''}<button class="btn alt" data-s="pending">${staff()?'অনুমোদনের জন্য রাখুন':'অনুমোদনের জন্য জমা দিন'}</button></div></form>`;
+ let st='pending',clicked=false,ed=null;
+ document.querySelectorAll('#nf [data-s]').forEach(b=>b.onclick=()=>{st=b.dataset.s;clicked=true});
+ document.querySelectorAll('.tbb').forEach(b=>{b.onmousedown=e=>e.preventDefault();b.onclick=()=>{const c=b.dataset.c;if(c=='createLink'){const u=prompt('লিংক (https://...)');if(u&&/^https?:\/\//i.test(u))document.execCommand('createLink',false,u)}else if(c=='formatBlock')document.execCommand('formatBlock',false,'h2');else document.execCommand(c)}});
+ if(id){const{data}=await sb.from('articles').select('*').eq('id',id).maybeSingle();ed=data;if(ed){const F=$('#nf');$('#ed').innerHTML=bodyToHtml(ed.body||'');['title','subtitle','summary','category','reporter','video_url'].forEach(k=>F.elements[k].value=ed[k]||'');if(F.elements.featured)F.elements.featured.checked=ed.featured;if(F.elements.breaking)F.elements.breaking.checked=ed.breaking}}
+ $('#nf').onsubmit=async e=>{
+  e.preventDefault();const f=new FormData(e.target),m=$('#nm');m.textContent='সংরক্ষণ হচ্ছে...';
+  if(!$('#ed').textContent.trim()){m.textContent='বিস্তারিত প্রতিবেদন লিখুন।';return}
+  const bh=clean($('#ed').innerHTML);
+  let url=null;const file=f.get('img');
+  if(file&&file.size){
+   if(file.size>5*1024*1024){m.textContent='ছবি ৫MB-এর বেশি হতে পারবে না।';return}
+   url=await up(file,me.id);
+   if(!url){m.textContent='ছবি আপলোড ব্যর্থ হয়েছে।';return}
+  }
+  const gal=[];for(const g of f.getAll('imgs')){if(g&&g.size){const u2=await up(g,me.id);if(u2)gal.push(u2)}}
+  const row={title:f.get('title'),subtitle:f.get('subtitle'),summary:f.get('summary'),body:bh,category:f.get('category'),reporter:f.get('reporter'),video_url:f.get('video_url')||null,image_url:url,status:staff()?st:'pending'};
+  if(staff()){row.featured=!!f.get('featured');row.breaking=!!f.get('breaking')}
+  if(gal.length)row.gallery=gal;
+  if(ed){if(!url)delete row.image_url;if(!clicked)delete row.status}
+  const{error}=ed?await sb.from('articles').update(row).eq('id',ed.id):await sb.from('articles').insert(row);
+  if(error){m.textContent='সংরক্ষণ ব্যর্থ: '+error.message;return}
+  log(ed?'edit':'create',row.title);
+  ticker();location.hash='#/admin';
+ };
+}
+
+async function mediaAdmin(){
+ const B=sb.storage.from('media'),files=[],o={limit:100,sortBy:{column:'created_at',order:'desc'}};
+ const{data:root}=await B.list('',o);
+ for(const x of root||[]){
+  if(x.id)files.push({path:x.name,name:x.name});
+  else{const{data:sub}=await B.list(x.name,o);(sub||[]).filter(y=>y.id).forEach(y=>files.push({path:x.name+'/'+y.name,name:y.name}))}
+ }
+ $('#pn').innerHTML=`<form class="f" id="mf"><label>ছবি আপলোড (একাধিক বাছাই করা যাবে)<input type="file" name="i" accept="image/jpeg,image/png,image/webp" multiple required></label><div id="mm" class="meta"></div><button class="btn">আপলোড করুন</button></form><h2 class="sec"><span>সব ছবি</span></h2><div class="grid c4">${files.map(f=>{const u=B.getPublicUrl(f.path).data.publicUrl;return `<div class="card"><img class="im" src="${esc(u)}" alt="${esc(f.name)}" loading="lazy"><div class="bd"><div class="meta" style="overflow-wrap:anywhere">${esc(f.name)}</div><div class="row"><button class="btn sm alt" data-cu="${esc(u)}">লিংক কপি</button><button class="btn sm alt" data-dp="${esc(f.path)}">মুছুন</button></div></div></div>`}).join('')||'<div class="empty">কোনো ছবি নেই।</div>'}</div>`;
+ $('#mf').onsubmit=async e=>{e.preventDefault();$('#mm').textContent='আপলোড হচ্ছে...';let bad=0;for(const f of new FormData(e.target).getAll('i')){if(f.size>5*1024*1024||!(await up(f,'library')))bad++}if(bad)$('#mm').textContent=bad+'টি ছবি আপলোড হয়নি (৫MB-এর বেশি বা ত্রুটি)।';else mediaAdmin()};
+ document.querySelectorAll('[data-cu]').forEach(b=>b.onclick=()=>navigator.clipboard.writeText(b.dataset.cu).then(()=>b.textContent='কপি হয়েছে'));
+ document.querySelectorAll('[data-dp]').forEach(b=>b.onclick=async()=>{if(!confirm('এই ছবি স্থায়ীভাবে মুছে ফেলবেন? যে নিউজে ব্যবহার হয়েছে সেখানে ছবি আর দেখাবে না।'))return;await B.remove([b.dataset.dp]);log('delete-media',b.dataset.dp);mediaAdmin()});
+}
+function userAdmin(){
+ if(role!='super_admin'){$('#pn').innerHTML='<div class="empty">শুধু Super Admin নতুন ইউজার তৈরি করতে পারে।</div>';return}
+ $('#pn').innerHTML=`<form class="f" id="uf"><label>নাম<input name="n" required></label><label>ইমেইল<input type="email" name="e" required></label><label>পাসওয়ার্ড (কমপক্ষে ৮ অক্ষর)<input type="password" name="p" minlength="8" required autocomplete="new-password"></label><label>ভূমিকা<select name="r"><option value="reporter">Reporter</option><option value="editor">Editor</option><option value="admin">Admin</option></select></label><div id="um" class="meta"></div><button class="btn">ইউজার তৈরি করুন</button></form>`;
+ $('#uf').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target),m=$('#um');m.textContent='তৈরি হচ্ছে...';const{data,error}=await sb.functions.invoke('create-user',{body:{name:f.get('n'),email:f.get('e'),password:f.get('p'),role:f.get('r')}});const bad=error||(data&&data.error);m.textContent=bad?'ব্যর্থ: Edge Function ডিপ্লয় হয়েছে কি না এবং তথ্য ঠিক আছে কি না দেখুন।':'ইউজার তৈরি হয়েছে।';if(!bad){log('create-user',f.get('e'));e.target.reset()}};
+}
+function dl(name,txt,type){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([txt],{type}));a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
+function backupAdmin(){
+ $('#pn').innerHTML='<div class="list"><div class="li"><b>ডাটা ব্যাকআপ</b><div class="meta">সব টেবিলের ডাটা JSON ফাইলে ডাউনলোড হবে। এটি স্বয়ংক্রিয় নয়, নিয়মিত নিজে করুন।</div><button class="btn sm" id="bkb">ব্যাকআপ ডাউনলোড</button></div><div class="li"><b>sitemap.xml</b><div class="meta">প্রকাশিত নিউজের তালিকা থেকে ফাইল তৈরি হবে। index.html-এর পাশে GitHub-এ আপলোড করুন।</div><button class="btn sm" id="smb">sitemap.xml ডাউনলোড</button></div></div>';
+ $('#bkb').onclick=async()=>{const o={};for(const t of['articles','categories','comments','advertisements','site_settings','polls','corrections','subscribers','audit_logs','profiles']){const{data}=await sb.from(t).select('*');o[t]=data||[]}dl('mirbagh-backup-'+new Date().toISOString().slice(0,10)+'.json',JSON.stringify(o),'application/json');log('backup','json download')};
+ $('#smb').onclick=async()=>{const b=location.href.split('#')[0],{data}=await pub().select('id,created_at').order('created_at',{ascending:false}).limit(1000);dl('sitemap.xml','<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n<url><loc>'+b+'</loc></url>\n'+(data||[]).map(a=>`<url><loc>${b}#/news/${a.id}</loc><lastmod>${a.created_at.slice(0,10)}</lastmod></url>`).join('\n')+'\n</urlset>','application/xml')};
+}
+async function ovAdmin(){
+ const c=s=>sb.from('articles').select('id',{count:'exact',head:true}).eq('status',s);
+ const day=new Date();day.setHours(0,0,0,0);
+ const[p,q,d,t,top,vw]=await Promise.all([c('published'),c('pending'),c('draft'),sb.from('articles').select('id',{count:'exact',head:true}).gte('created_at',day.toISOString()),sb.from('articles').select('id,title,views').eq('status','published').order('views',{ascending:false}).limit(5),sb.from('articles').select('views').limit(1000)]);
+ const tv=(vw.data||[]).reduce((s,x)=>s+(x.views||0),0);
+ $('#pn').innerHTML=`<div class="stats"><div><b>${p.count||0}</b>প্রকাশিত নিউজ</div><div><b>${q.count||0}</b>অনুমোদনের অপেক্ষায়</div><div><b>${d.count||0}</b>খসড়া</div><div><b>${t.count||0}</b>আজকের নিউজ</div><div><b>${tv}</b>মোট ভিউ</div></div><h2 class="sec"><span>জনপ্রিয় নিউজ</span></h2><div class="list">${(top.data||[]).map(a=>`<a class="li" href="#/news/${a.id}"><b>${esc(a.title)}</b><span class="meta">${a.views} ভিউ</span></a>`).join('')||'<div class="empty">এখনো কোনো ভিউ নেই।</div>'}</div>`;
+}
+async function logAdmin(){
+ const{data}=await sb.from('audit_logs').select('*').order('created_at',{ascending:false}).limit(60);
+ $('#pn').innerHTML=data&&data.length?`<div class="list">${data.map(l=>`<div class="li"><b>${esc(l.action)}</b><div>${esc(l.detail||'')}</div><div class="meta">${fmt(l.created_at)}</div></div>`).join('')}</div>`:'<div class="empty">কোনো কার্যক্রম নেই।</div>';
+}
+async function saved(){
+ app.innerHTML=need()+'<h2 class="sec"><span>সংরক্ষিত নিউজ</span></h2>';
+ if(!sb)return;
+ let ids=[];try{ids=JSON.parse(localStorage.getItem('bk')||'[]')}catch{}
+ if(!ids.length){app.innerHTML+='<div class="empty">এখনো কোনো নিউজ সংরক্ষণ করা হয়নি।</div>';return}
+ const{data}=await pub().in('id',ids);
+ app.innerHTML+=data&&data.length?`<div class="grid c4">${data.map(card).join('')}</div>`:'<div class="empty">সংরক্ষিত নিউজ পাওয়া যায়নি।</div>';
+}
+async function catAdmin(){
+ const{data}=await sb.from('categories').select('*');
+ $('#pn').innerHTML=`<form class="f" id="cgf"><label>নতুন ক্যাটাগরির নাম<input name="n" required maxlength="40"></label><div id="cgm" class="meta"></div><button class="btn">যোগ করুন</button></form><div class="list" style="margin-top:12px">${(data||[]).map(c=>`<div class="li"><b>${esc(c.name)}</b><div class="row"><button class="btn sm alt" data-cn="${esc(c.slug)}" data-n="${esc(c.name)}">নাম বদল</button><button class="btn sm alt" data-cd="${esc(c.slug)}">মুছুন</button></div></div>`).join('')||'<div class="empty">কোনো কাস্টম ক্যাটাগরি নেই।</div>'}</div>`;
+ $('#cgf').onsubmit=async e=>{e.preventDefault();const n=new FormData(e.target).get('n').trim();const{error}=await sb.from('categories').insert({slug:'c'+Date.now().toString(36),name:n});if(error)$('#cgm').textContent='যোগ করা যায়নি: '+error.message;else location.reload()};
+ document.querySelectorAll('[data-cn]').forEach(b=>b.onclick=async()=>{const n=prompt('নতুন নাম',b.dataset.n);if(!n||!n.trim())return;await sb.from('categories').update({name:n.trim()}).eq('slug',b.dataset.cn);location.reload()});
+ document.querySelectorAll('[data-cd]').forEach(b=>b.onclick=async()=>{if(!confirm('ক্যাটাগরি মুছলে এর নিউজগুলো ক্যাটাগরি ছাড়া দেখাবে। মুছবেন?'))return;await sb.from('categories').delete().eq('slug',b.dataset.cd);location.reload()});
+}
+async function pollAdmin(){
+ const{data}=await sb.from('polls').select('*').order('created_at',{ascending:false});
+ $('#pn').innerHTML=`<form class="f" id="plf"><label>প্রশ্ন<input name="q" required></label><label>অপশন (প্রতি লাইনে একটি, কমপক্ষে ২টি)<textarea name="o" required style="min-height:90px"></textarea></label><div id="plm" class="meta"></div><button class="btn">পোল তৈরি করুন</button></form><div class="list" style="margin-top:12px">${(data||[]).map(p=>`<div class="li"><b>${esc(p.question)}</b><div class="meta">${p.options.map((o,i)=>esc(o)+': '+p.votes[i]).join(' | ')}</div><div class="row"><button class="btn sm alt" data-pt="${p.id}" data-v="${p.active}">${p.active?'বন্ধ করুন':'চালু করুন'}</button><button class="btn sm alt" data-pd="${p.id}">মুছুন</button></div></div>`).join('')}</div>`;
+ $('#plf').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target),o=f.get('o').split('\n').map(x=>x.trim()).filter(Boolean);if(o.length<2){$('#plm').textContent='কমপক্ষে ২টি অপশন দিন।';return}const{error}=await sb.from('polls').insert({question:f.get('q'),options:o,votes:o.map(()=>0)});if(error)$('#plm').textContent='তৈরি করা যায়নি: '+error.message;else pollAdmin()};
+ document.querySelectorAll('[data-pt]').forEach(b=>b.onclick=async()=>{await sb.from('polls').update({active:b.dataset.v!='true'}).eq('id',b.dataset.pt);pollAdmin()});
+ document.querySelectorAll('[data-pd]').forEach(b=>b.onclick=async()=>{if(!confirm('এই পোল মুছে ফেলবেন?'))return;await sb.from('polls').delete().eq('id',b.dataset.pd);pollAdmin()});
+}
+async function adsAdmin(){
+ const P=[['top','হোমপেজ টপ'],['article','নিউজ পেজ'],['footer','ফুটার']];
+ const{data}=await sb.from('advertisements').select('*').order('created_at',{ascending:false});
+ $('#pn').innerHTML=`<form class="f" id="af"><label>বিজ্ঞাপনদাতা<input name="name" required></label><label>ব্যানার ছবি<input type="file" name="img" accept="image/jpeg,image/png,image/webp" required></label><label>লিংক<input name="link" type="url"></label><label>স্থান<select name="position">${P.map(p=>`<option value="${p[0]}">${p[1]}</option>`).join('')}</select></label><label>শুরুর তারিখ<input type="date" name="starts"></label><label>শেষ তারিখ<input type="date" name="ends"></label><div id="am" class="meta"></div><button class="btn">যোগ করুন</button></form><h2 class="sec"><span>সব বিজ্ঞাপন</span></h2><div class="list">${(data||[]).map(a=>`<div class="li"><b>${esc(a.name)}</b><div class="meta">${esc(a.position)} | ${a.views} ভিউ | ${a.clicks} ক্লিক | ${a.active?'চালু':'বন্ধ'}</div><div class="row"><button class="btn sm alt" data-t="${a.id}" data-v="${a.active}">${a.active?'বন্ধ করুন':'চালু করুন'}</button><button class="btn sm alt" data-d="${a.id}">মুছুন</button></div></div>`).join('')||'<div class="empty">কোনো বিজ্ঞাপন নেই।</div>'}</div>`;
+ $('#af').onsubmit=async e=>{
+  e.preventDefault();const f=new FormData(e.target),m=$('#am'),file=f.get('img');
+  if(file.size>5*1024*1024){m.textContent='ছবি ৫MB-এর বেশি হতে পারবে না।';return}
+  const p=`ads/${Date.now()}-${file.name.replace(/[^\w.-]/g,'_')}`;
+  const u=await sb.storage.from('media').upload(p,file);
+  if(u.error){m.textContent='ছবি আপলোড ব্যর্থ হয়েছে।';return}
+  const{error}=await sb.from('advertisements').insert({name:f.get('name'),image_url:sb.storage.from('media').getPublicUrl(p).data.publicUrl,link:f.get('link')||null,position:f.get('position'),starts:f.get('starts')||null,ends:f.get('ends')||null});
+  if(error)m.textContent='সংরক্ষণ ব্যর্থ: '+error.message;else adsAdmin();
+ };
+ document.querySelectorAll('[data-t]').forEach(b=>b.onclick=async()=>{await sb.from('advertisements').update({active:b.dataset.v!='true'}).eq('id',b.dataset.t);adsAdmin()});
+ document.querySelectorAll('[data-d]').forEach(b=>b.onclick=async()=>{if(!confirm('এই বিজ্ঞাপন মুছে ফেলবেন?'))return;await sb.from('advertisements').delete().eq('id',b.dataset.d);adsAdmin()});
+}
+async function cmAdmin(){
+ const{data}=await sb.from('comments').select('*').order('created_at',{ascending:false}).limit(60);
+ $('#pn').innerHTML=data&&data.length?`<div class="list">${data.map(c=>`<div class="li"><b>${esc(c.name)}</b><div>${esc(c.body)}</div><div class="meta">${fmt(c.created_at)} | <a href="#/news/${c.article_id}">নিউজ</a> | ${c.approved?'প্রকাশিত':'অপেক্ষায়'}</div><div class="row">${c.approved?'':`<button class="btn sm" data-ok="${c.id}">অনুমোদন</button>`}<button class="btn sm alt" data-x="${c.id}">মুছুন</button></div></div>`).join('')}</div>`:'<div class="empty">কোনো মন্তব্য নেই।</div>';
+ document.querySelectorAll('[data-ok]').forEach(b=>b.onclick=async()=>{await sb.from('comments').update({approved:true}).eq('id',b.dataset.ok);cmAdmin()});
+ document.querySelectorAll('[data-x]').forEach(b=>b.onclick=async()=>{if(!confirm('এই মন্তব্য মুছে ফেলবেন?'))return;await sb.from('comments').delete().eq('id',b.dataset.x);cmAdmin()});
+}
+function setForm(){
+ const K=[['live_url','লাইভ ভিডিও URL (YouTube/Facebook)'],['facebook','Facebook Page লিংক'],['youtube','YouTube Channel লিংক']];
+ if(!staff()){$('#pn').innerHTML='';return}
+ $('#pn').innerHTML=`<form class="f" id="sf2">${K.map(k=>`<label>${k[1]}<input name="${k[0]}" type="url" value="${esc(SET[k[0]]||'')}"></label>`).join('')}<div id="sm" class="meta"></div><button class="btn">সংরক্ষণ করুন</button></form>`;
+ $('#sf2').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);const{error}=await sb.from('site_settings').upsert(K.map(k=>({key:k[0],value:f.get(k[0])})));$('#sm').textContent=error?'সংরক্ষণ ব্যর্থ: '+error.message:'সংরক্ষিত হয়েছে।';if(!error)loadSet()};
+}
+async function corList(){
+ const{data}=await sb.from('corrections').select('*').order('created_at',{ascending:false}).limit(50);
+ $('#pn').innerHTML=data&&data.length?`<div class="list">${data.map(c=>`<div class="li"><b>${esc(c.message)}</b><div class="meta">${fmt(c.created_at)} | ${esc(c.email||'ইমেইল নেই')} | <a href="#/news/${c.article_id}">নিউজ দেখুন</a></div></div>`).join('')}</div>`:'<div class="empty">কোনো অনুরোধ নেই।</div>';
+}
+// ===== রাউটার =====
+async function route(){
+ const[,r,x,y]=location.hash.split('/');document.title='MIRBAGH TV — MTv NEWS 7/24';
+ $('#nv').classList.remove('open');scrollTo(0,0);
+ document.querySelectorAll('nav a').forEach(a=>a.classList.toggle('on',a.getAttribute('href')==location.hash||(!r&&a.getAttribute('href')=='#/')));
+ try{
+  if(!r)await home();
+  else if(r=='cat')await cat(x);
+  else if(r=='news')await news(x);
+  else if(r=='search')await search(decodeURIComponent(x||''));
+  else if(r=='page')page(x);
+  else if(r=='saved')await saved();
+  else if(r=='admin'||r=='reporter')await admin(x,y);
+  else nf();
+ }catch(e){app.innerHTML='<div class="empty">কিছু একটা সমস্যা হয়েছে। পরে আবার চেষ্টা করুন।</div>'}
+}
+addEventListener('hashchange',route);
+who();ticker();loadSet().finally(route);adHtml('footer').then(h=>$('#fa').innerHTML=h);
+</script>
+</body>
+</html>
